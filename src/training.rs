@@ -125,6 +125,24 @@ pub struct ProgressCollector {
     pub index: usize,
 }
 
+#[derive(Clone)]
+pub struct ProgressCollector2 {
+    pub interrupter: TrainingInterrupter,
+    // function pointer
+    pub f: Option<fn(i32) -> ()>,
+    // switch to the below (closure) to get `(dyn Fn(i32) + 'static)` cannot be shared between threads safely
+    // pub f: Option<Box<dyn Fn(i32) -> ()>>,
+}
+
+impl ProgressCollector2 {
+    pub fn new(f: Option<fn(i32) -> ()>) -> Self {
+        Self {
+            interrupter: Default::default(),
+            f,
+        }
+    }
+}
+
 impl ProgressCollector {
     pub fn new(state: Arc<Mutex<CombinedProgressState>>, index: usize) -> Self {
         Self {
@@ -160,6 +178,24 @@ impl MetricsRenderer for ProgressCollector {
         if info.want_abort {
             self.interrupter.stop();
         }
+    }
+
+    fn render_valid(&mut self, _item: TrainingProgress) {}
+}
+
+// where the error occurs
+impl MetricsRenderer for ProgressCollector2 {
+    fn update_train(&mut self, _state: MetricState) {}
+
+    fn update_valid(&mut self, _state: MetricState) {}
+
+    fn render_train(&mut self, item: TrainingProgress) {
+        if self.f.is_some() {
+            (self.f.unwrap())(1337);
+        }
+        // if let Some((self.x)) = x {
+        //     (x).(1337)
+        // }
     }
 
     fn render_valid(&mut self, _item: TrainingProgress) {}
@@ -202,6 +238,7 @@ impl<B: Backend> FSRS<B> {
         items: Vec<FSRSItem>,
         pretrain_only: bool,
         progress: Option<Arc<Mutex<CombinedProgressState>>>,
+        cb: Option<fn(i32) -> ()>,
     ) -> Result<Vec<f32>> {
         let finish_progress = || {
             if let Some(progress) = &progress {
@@ -266,7 +303,7 @@ impl<B: Backend> FSRS<B> {
                     testset.clone(),
                     &config,
                     self.device(),
-                    progress.clone().map(|p| ProgressCollector::new(p, idx)),
+                    Some(ProgressCollector2::new(cb)),
                 );
                 Ok(model
                     .map_err(|e| {
@@ -323,7 +360,7 @@ fn train<B: AutodiffBackend>(
     testset: Vec<FSRSItem>,
     config: &TrainingConfig,
     device: B::Device,
-    progress: Option<ProgressCollector>,
+    progress: Option<ProgressCollector2>,
 ) -> Result<Model<B>> {
     B::seed(config.seed);
 
